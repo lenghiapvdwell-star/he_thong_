@@ -44,19 +44,19 @@ def calculate_pro_signals(df, vni_df):
     mdi = 100 * (mdm.ewm(alpha=1/p, adjust=False).mean() / atr)
     df['adx'] = (100 * (abs(pdi-mdi)/(pdi+mdi).replace(0, np.nan))).ewm(alpha=1/p, adjust=False).mean()
 
-    # 3. RS (Relative Strength)
+    # 3. RS (Sức mạnh tương quan)
     vni_c = vni_df['close'] if 'close' in vni_df.columns else vni_df['Close']
     df['rs'] = round(((c/c.shift(5)) - (vni_c.iloc[-1]/vni_c.iloc[-5])) * 100, 2)
     
     # 4. LOGIC DÒNG TIỀN & NỀN GIÁ
     df['base_volatility'] = (c.rolling(120).max() - c.rolling(120).min()) / c.rolling(120).mean()
-    df['is_flat_base'] = df['base_volatility'] < 0.25
+    df['is_flat_base'] = df['base_volatility'] < 0.25 # Nền phẳng 6 tháng
     df['is_bomb'] = df['bb_width'] <= df['bb_width'].rolling(30).min()
     df['vol_trend'] = v.rolling(5).mean() > v.shift(5).rolling(5).mean()
     
-    # ĐIỂM MUA CHUẨN
+    # ĐIỂM MUA CHUẨN: Tiền vào + MA20 >= MA50 + Vol đột biến
     df['is_buy'] = (c > df['ma20']) & (df['ma20'] >= df['ma50'] * 0.99) & \
-                   (v > v.rolling(20).mean() * 1.3) & (df['rsi'].between(45, 75))
+                   (v > v.rolling(20).mean() * 1.3) & (df['rsi'].between(45, 78))
     
     # Target & Stoploss
     df['target_1'] = round(c * 1.12, 0)
@@ -65,14 +65,15 @@ def calculate_pro_signals(df, vni_df):
     
     return df
 
-# --- GIAO DIỆN SIDEBAR ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("💎 HỆ THỐNG V33")
+    st.header("⚡ HỆ THỐNG V33")
     if st.button("🔄 CẬP NHẬT REALTIME"):
-        with st.spinner("Đang tải dữ liệu..."):
+        with st.spinner("Đang đồng bộ dữ liệu..."):
             v_df = yf.download("^VNINDEX", period="2y").reset_index()
             v_df.to_csv("VNINDEX.csv", index=False)
-            list_m = ['MWG','FRT','DGW','MSN','SSI','VND','VCI','HPG','NKG','HSG','DIG','PDR','VHM','FPT','DGC']
+            # Quét các mã tiêu biểu
+            list_m = ['MWG','FRT','DGW','MSN','SSI','VND','VCI','HPG','NKG','HSG','DIG','PDR','VHM','FPT','DGC','SHB','VNM']
             all_data = []
             for m in list_m:
                 t = yf.download(f"{m}.VN", period="2y", progress=False).reset_index()
@@ -82,16 +83,16 @@ with st.sidebar:
             st.success("Đã đồng bộ thành công!")
 
     st.divider()
-    mode = st.radio("MENU:", ["📊 DÒNG TIỀN NGÀNH", "🌟 SIÊU SAO THEO DÕI", "📈 SOI CHI TIẾT MÃ"])
+    mode = st.radio("CHỨC NĂNG:", ["📊 DÒNG TIỀN NGÀNH", "🌟 SIÊU SAO THEO DÕI", "📈 SOI CHI TIẾT MÃ"])
     ticker_input = st.text_input("MÃ SOI:", "MWG").upper()
 
-# --- XỬ LÝ CHÍNH ---
+# --- HIỂN THỊ CHÍNH ---
 try:
     vni_df = pd.read_csv("https://raw.githubusercontent.com/" + GITHUB_USER + "/" + REPO_NAME + "/main/VNINDEX.csv")
     hose_df = pd.read_csv("https://raw.githubusercontent.com/" + GITHUB_USER + "/" + REPO_NAME + "/main/hose.csv")
 
     if mode == "📊 DÒNG TIỀN NGÀNH":
-        st.header("🌊 ĐIỂM DÒNG TIỀN NHÓM NGÀNH (Scale 10)")
+        st.header("🌊 ĐIỂM DÒNG TIỀN NHÓM NGÀNH (Thang điểm 10)")
         sectors = {
             "BÁN LẺ (MWG, FRT, DGW, MSN)": ['MWG', 'FRT', 'DGW', 'MSN'],
             "CHỨNG KHOÁN (SSI, VND, VCI)": ['SSI', 'VND', 'VCI'],
@@ -106,43 +107,48 @@ try:
                     l = d.iloc[-1]
                     s = (4 if l['is_buy'] else 0) + (3 if l['vol_trend'] else 0) + (3 if l['rs'] > 0 else 0)
                     sc.append(s)
-            res.append({"Ngành": name, "Điểm Dòng Tiền": round(np.mean(sc),1)})
-        st.table(pd.DataFrame(res).sort_values("Điểm Dòng Tiền", ascending=False))
+            res.append({"Ngành": name, "Điểm": round(np.mean(sc),1), "Trạng thái": "🔥 DẪN DẮT" if np.mean(sc) > 6 else "Tích lũy"})
+        st.table(pd.DataFrame(res).sort_values("Điểm", ascending=False))
 
     elif mode == "🌟 SIÊU SAO THEO DÕI":
-        st.subheader("🚀 LỌC SIÊU CỔ NỀN PHẲNG & DÒNG TIỀN")
+        st.subheader("🚀 BỘ LỌC SIÊU CỔ PHIẾU V33")
         v_list = []
         for s in hose_df['symbol'].unique():
             d = calculate_pro_signals(hose_df[hose_df['symbol']==s].copy(), vni_df)
             if d is not None:
                 l = d.iloc[-1]
                 if l['is_buy'] or l['is_bomb']:
-                    v_list.append({"Mã": s, "Giá": int(l['close']), "RS": l['rs'], "RSI": round(l['rsi'],1), "Tín hiệu": "🏹 MUA" if l['is_buy'] else "💣 BÓ CHẶT"})
+                    v_list.append({"Mã": s, "Giá": int(l['close']), "Nền 6T": "✅" if l['is_flat_base'] else "❌", "RS": l['rs'], "Tín hiệu": "🏹 MUA" if l['is_buy'] else "💣 BÓ CHẶT"})
         st.dataframe(pd.DataFrame(v_list), use_container_width=True)
 
     elif mode == "📈 SOI CHI TIẾT MÃ":
         df_c = calculate_pro_signals(hose_df[hose_df['symbol'] == ticker_input].copy(), vni_df)
         if df_c is not None:
+            # Layout đa tầng mượt mà
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.5, 0.1, 0.2, 0.2])
             
-            # Chart nến & MA
-            fig.add_trace(go.Candlestick(x=df_c['date'], open=df_c['open'], high=df_c['high'], low=df_c['low'], close=df_c['close'], name="Giá"), row=1, col=1)
+            # Tầng 1: Nến & MA
+            fig.add_trace(go.Candlestick(x=df_c['date'], open=df_c['open'], high=df_c['high'], low=df_c['low'], close=df_c['close'], name=ticker_input), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_c['date'], y=df_c['ma20'], line=dict(color='yellow', width=2), name="MA20"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_c['date'], y=df_c['ma50'], line=dict(color='cyan', width=1.5), name="MA50"), row=1, col=1)
             
-            # Bomb & Mũi tên Mua
+            # Quả bom 💣 & Mũi tên Mua 🏹
             b_pts = df_c[df_c['is_bomb']]
-            fig.add_trace(go.Scatter(x=b_pts['date'], y=b_pts['high']*1.02, mode='text', text="💣", textfont=dict(size=20), name="Bomb"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=b_pts['date'], y=b_pts['high']*1.02, mode='text', text="💣", textfont=dict(size=22), name="Bomb"), row=1, col=1)
             buy_pts = df_c[df_c['is_buy']]
             fig.add_trace(go.Scatter(x=buy_pts['date'], y=buy_pts['low']*0.98, mode='markers+text', text="🏹 MUA", marker=dict(symbol='triangle-up', size=15, color='lime'), name="MUA"), row=1, col=1)
 
-            # Volume, RS, RSI, ADX
+            # Tầng 2: Volume
             fig.add_trace(go.Bar(x=df_c['date'], y=df_c['volume'], name="Volume"), row=2, col=1)
+
+            # Tầng 3: RS & RSI
             fig.add_trace(go.Scatter(x=df_c['date'], y=df_c['rs'], name="RS", line=dict(color='magenta')), row=3, col=1)
             fig.add_trace(go.Scatter(x=df_c['date'], y=df_c['rsi'], name="RSI", line=dict(color='orange')), row=3, col=1)
+
+            # Tầng 4: ADX
             fig.add_trace(go.Scatter(x=df_c['date'], y=df_c['adx'], name="ADX", line=dict(color='white')), row=4, col=1)
 
-            # CẤU HÌNH FIREANT STYLE
+            # --- CẤU HÌNH KÉO DÃN FIREANT ---
             fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, dragmode='pan', hovermode='x unified',
                               yaxis=dict(side='right', fixedrange=False, autorange=True),
                               yaxis2=dict(side='right', fixedrange=False, autorange=True),
@@ -151,9 +157,9 @@ try:
                               xaxis=dict(fixedrange=False))
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
             
-            # Khuyến nghị
+            # Khối Khuyến nghị
             l = df_c.iloc[-1]
-            st.success(f"🎯 Target 1: {l['target_1']:,} | Target 2: {l['target_2']:,} | 🛑 Stoploss: {l['stop_loss']:,}")
+            st.info(f"🎯 Target 1: {l['target_1']:,} | Target 2: {l['target_2']:,} | 🛑 Stoploss: {l['stop_loss']:,}")
 
 except Exception as e:
-    st.error(f"Vui lòng nhấn 'CẬP NHẬT REALTIME' để bắt đầu. Lỗi: {e}")
+    st.error(f"Vui lòng nhấn 'CẬP NHẬT REALTIME' ở Sidebar để tạo dữ liệu. Lỗi: {e}")
