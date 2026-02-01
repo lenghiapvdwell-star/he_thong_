@@ -6,7 +6,7 @@ import numpy as np
 import os
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="V43 - SMART MONEY PRO", layout="wide")
+st.set_page_config(page_title="V44 - VN-INDEX STRATEGY", layout="wide")
 
 def load_data(file_name):
     if not os.path.exists(file_name): return None
@@ -20,7 +20,7 @@ def load_data(file_name):
     df['symbol'] = df['symbol'].astype(str).str.upper().str.strip()
     return df.sort_values('date')
 
-# --- TÍNH TOÁN CHỈ BÁO CHI TIẾT ---
+# --- HÀM TÍNH TOÁN CHỈ BÁO CHI TIẾT ---
 def calculate_pro_signals(df, vni_df=None):
     if df is None or len(df) < 20: return None
     df = df.copy().sort_values('date')
@@ -47,7 +47,7 @@ def calculate_pro_signals(df, vni_df=None):
     atr = tr.rolling(14, min_periods=1).mean()
     df['adx'] = (abs(plus_dm - minus_dm) / (plus_dm + minus_dm).replace(0, 1) * 100).rolling(14, min_periods=1).mean()
 
-    # 4. RS (Sức mạnh tương quan vs VNI)
+    # 4. RS (Sức mạnh tương quan)
     if vni_df is not None:
         vni_df = vni_df.sort_values('date')
         combined = pd.merge(df[['date', 'close']], vni_df[['date', 'close']], on='date', suffixes=('', '_vni'))
@@ -56,11 +56,9 @@ def calculate_pro_signals(df, vni_df=None):
             df = pd.merge(df, pd.DataFrame({'date': combined['date'], 'rs': rs_val}), on='date', how='left')
     if 'rs' not in df.columns: df['rs'] = 0
 
-    # 5. ĐIỂM MUA & BOOM TIỀN
+    # 5. Tín hiệu đặc biệt
     df['vol20'] = df['volume'].rolling(20, min_periods=1).mean()
-    # Mũi tên xanh: Giá > MA20 & Vol > 1.2 lần trung bình
     df['buy_signal'] = (df['close'] > df['ma20']) & (df['volume'] > df['vol20'] * 1.2)
-    # Quả bom tiền: Vol > 2.0 lần trung bình + Giá tăng > 3%
     df['money_bomb'] = (df['volume'] > df['vol20'] * 2.0) & (df['close'] > df['close'].shift(1) * 1.03)
     
     return df
@@ -70,14 +68,40 @@ hose_df = load_data("hose.csv")
 vni_df = load_data("vnindex.csv")
 
 with st.sidebar:
-    st.header("🏆 SUPREME V43")
+    st.header("🏆 SUPREME V44")
     ticker = st.text_input("🔍 MÃ SOI:", "HPG").upper()
-    if st.button("📈 SỨC KHỎE VN-INDEX"):
+    
+    st.divider()
+    # --- PHẦN SỨC KHỎE VNINDEX ---
+    st.subheader("📊 THỊ TRƯỜNG CHUNG")
+    if st.button("📈 KIỂM TRA VN-INDEX", use_container_width=True):
         if vni_df is not None:
             v_res = calculate_pro_signals(vni_df)
-            st.metric("VNI ADX", round(v_res['adx'].iloc[-1], 1))
-            st.metric("VNI RSI", round(v_res['rsi'].iloc[-1], 1))
-    menu = st.radio("MENU:", ["📈 ĐỒ THỊ CHI TIẾT", "📊 DÒNG TIỀN NGÀNH", "🎯 LỌC ĐIỂM MUA"])
+            last_v = v_res.iloc[-1]
+            
+            # Chấm điểm VNI
+            v_score = 0
+            if last_v['close'] > last_v['ma20']: v_score += 3
+            if last_v['close'] > last_v['ma50']: v_score += 2
+            if last_v['rsi'] > 50: v_score += 2
+            if last_v['adx'] > 25: v_score += 3
+            
+            st.metric("CHẤM ĐIỂM VNI", f"{v_score}/10")
+            
+            # Hiển thị các thông số
+            st.write(f"**RSI:** {round(last_v['rsi'], 1)}")
+            st.write(f"**ADX:** {round(last_v['adx'], 1)}")
+            st.write(f"**Vị thế:** {'Trên MA20' if last_v['close'] > last_v['ma20'] else 'Dưới MA20'}")
+            
+            # Khuyến nghị
+            if v_score >= 7: st.success("🚀 MUA MẠNH: Thị trường bùng nổ.")
+            elif v_score >= 5: st.warning("⚖️ THEO DÕI: Thị trường đang tích lũy.")
+            else: st.error("⚠️ RỦI RO: Hạ tỷ trọng, đứng ngoài.")
+        else:
+            st.error("Thiếu file vnindex.csv")
+    
+    st.divider()
+    menu = st.radio("CHỨC NĂNG:", ["📈 ĐỒ THỊ CHI TIẾT", "📊 DÒNG TIỀN NGÀNH", "🎯 LỌC ĐIỂM MUA"])
 
 if hose_df is not None:
     if menu == "📈 ĐỒ THỊ CHI TIẾT":
@@ -90,11 +114,10 @@ if hose_df is not None:
             fig.add_trace(go.Scatter(x=data['date'], y=data['ma20'], line=dict(color='yellow', width=2), name="MA20"), row=1, col=1)
             fig.add_trace(go.Scatter(x=data['date'], y=data['ma50'], line=dict(color='cyan', width=1.5), name="MA50"), row=1, col=1)
             
-            # Mũi tên mua (⬆️)
+            # Điểm mua (Mũi tên) & Bom tiền
             buys = data[data['buy_signal']]
             fig.add_trace(go.Scatter(x=buys['date'], y=buys['low']*0.98, mode='markers+text', text="⬆️", textposition="bottom center", marker=dict(size=12, color='lime'), name="Điểm mua"), row=1, col=1)
             
-            # Quả bom tiền (💣)
             bombs = data[data['money_bomb']]
             fig.add_trace(go.Scatter(x=bombs['date'], y=bombs['high']*1.02, mode='markers+text', text="💣", textposition="top center", marker=dict(size=15, color='red'), name="BOM TIỀN"), row=1, col=1)
 
@@ -103,18 +126,18 @@ if hose_df is not None:
             
             # Tầng 3: RSI & RS
             fig.add_trace(go.Scatter(x=data['date'], y=data['rsi'], line=dict(color='orange'), name="RSI"), row=3, col=1)
-            fig.add_trace(go.Scatter(x=data['date'], y=data['rs']*50, line=dict(color='magenta'), name="RS (x50)"), row=3, col=1)
+            fig.add_trace(go.Scatter(x=data['date'], y=data['rs']*50, line=dict(color='magenta'), name="RS Sức mạnh"), row=3, col=1)
             
             # Tầng 4: ADX
-            fig.add_trace(go.Scatter(x=data['date'], y=data['adx'], fill='tozeroy', name="ADX"), row=4, col=1)
+            fig.add_trace(go.Scatter(x=data['date'], y=data['adx'], fill='tozeroy', name="ADX Sức mạnh xu hướng"), row=4, col=1)
 
-            fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, dragmode='pan')
+            fig.update_layout(height=850, template="plotly_dark", xaxis_rangeslider_visible=False, dragmode='pan')
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
         else:
-            st.error("Dữ liệu không đủ hoặc lỗi mã.")
+            st.error(f"Không tìm thấy mã {ticker}")
 
     elif menu == "📊 DÒNG TIỀN NGÀNH":
-        # Tự động quét dòng tiền theo danh mục ngành
+        st.subheader("🌊 SỨC MẠNH DÒNG TIỀN NGÀNH (Scale 10)")
         nganh_dict = {"THÉP":['HPG','NKG','HSG'], "BANK":['VCB','TCB','MBB'], "CHỨNG":['SSI','VND','VCI'], "BĐS":['DIG','PDR','VHM'], "BÁN LẺ":['MWG','FRT','MSN']}
         res = []
         for n, mãs in nganh_dict.items():
@@ -123,15 +146,15 @@ if hose_df is not None:
                 d = calculate_pro_signals(hose_df[hose_df['symbol'] == m], vni_df)
                 if d is not None:
                     s = 0
-                    last = d.iloc[-1]
-                    if last['buy_signal']: s += 5
-                    if last['money_bomb']: s += 5
+                    l = d.iloc[-1]
+                    if l['close'] > l['ma20']: s += 5
+                    if l['money_bomb'] or l['buy_signal']: s += 5
                     scores.append(s)
-            res.append({"Ngành": n, "Sức Mạnh Dòng Tiền": np.mean(scores) if scores else 0})
-        st.table(pd.DataFrame(res).sort_values("Sức Mạnh Dòng Tiền", ascending=False))
+            res.append({"Ngành": n, "Sức Mạnh": np.mean(scores) if scores else 0})
+        st.table(pd.DataFrame(res).sort_values("Sức Mạnh", ascending=False))
 
     elif menu == "🎯 LỌC ĐIỂM MUA":
-        st.subheader("🚀 QUÉT SIÊU ĐIỂM MUA & BOM TIỀN")
+        st.subheader("🚀 QUÉT CỔ PHIẾU CÓ DÒNG TIỀN VÀO")
         found = []
         for s in hose_df['symbol'].unique():
             d = calculate_pro_signals(hose_df[hose_df['symbol'] == s], vni_df)
@@ -141,4 +164,4 @@ if hose_df is not None:
                     found.append({"Mã": s, "Tín hiệu": "💣 BOM TIỀN" if last['money_bomb'] else "⬆️ ĐIỂM MUA", "RSI": round(last['rsi'],1), "Giá": last['close']})
         st.dataframe(pd.DataFrame(found), use_container_width=True)
 else:
-    st.error("❌ Không tìm thấy hose.csv")
+    st.error("❌ Thiếu file dữ liệu hose.csv!")
