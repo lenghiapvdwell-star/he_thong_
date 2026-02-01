@@ -7,9 +7,9 @@ import yfinance as yf
 import os
 
 # --- CẤU HÌNH ---
-st.set_page_config(page_title="V37.5 - FINAL CORE", layout="wide")
+st.set_page_config(page_title="V38.0 - REALTIME TERMINAL", layout="wide")
 
-# --- DANH MỤC MÃ ---
+# --- DANH MỤC NGÀNH ---
 NGANH_MASTER = {
     "BÁN LẺ": ['MWG','FRT','DGW','MSN'], 
     "CHỨNG KHOÁN": ['SSI','VND','VCI','VIX','FTS'], 
@@ -19,35 +19,28 @@ NGANH_MASTER = {
 }
 ALL_TICKERS = [t for sub in NGANH_MASTER.values() for t in sub]
 
-# --- HÀM TÍNH TOÁN CORE (ĐÃ FIX LỖI CẤU TRÚC) ---
-def calculate_master_signals(df):
-    if df is None or len(df) < 15: return None
+# --- HÀM XỬ LÝ DỮ LIỆU CHUẨN ---
+def process_df(df):
+    if df is None or df.empty: return None
     df = df.copy()
-    
-    # 1. Xử lý triệt để cấu trúc cột (Chống lỗi Multi-Index)
+    # Fix lỗi cấu trúc Yahoo Finance mới
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    
     df.columns = [str(col).strip().lower() for col in df.columns]
-    
-    # Đảm bảo có cột Date để sắp xếp
     if 'date' not in df.columns:
         df = df.reset_index()
-        df.columns = [str(col).strip().lower() for col in df.columns]
-    
-    # Xóa cột trùng và dòng trùng
+    df.columns = [str(col).strip().lower() for col in df.columns]
     df = df.loc[:, ~df.columns.duplicated()]
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     df = df.dropna(subset=['date', 'close']).drop_duplicates(subset=['date'])
-    df = df.sort_values('date').reset_index(drop=True)
+    return df.sort_values('date').reset_index(drop=True)
 
-    if len(df) < 15: return None
-
-    # 2. Chuyển đổi dữ liệu số
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # 3. Tính toán chỉ báo (Dòng tiền & Kỹ thuật)
+# --- HÀM TÍNH CHỈ BÁO ---
+def calculate_indicators(df):
+    df = process_df(df)
+    if df is None or len(df) < 15: return None
+    
+    # Chỉ báo kỹ thuật
     df['ma10'] = df['close'].rolling(10).mean()
     df['ma20'] = df['close'].rolling(20).mean()
     df['ma50'] = df['close'].rolling(50).mean()
@@ -58,106 +51,91 @@ def calculate_master_signals(df):
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     df['rsi'] = 100 - (100 / (1 + (gain / loss.replace(0, 0.001))))
     
-    # Money In (Vol vượt 1.2 trung bình 20 phiên)
-    df['money_in'] = (df['volume'] > df['volume'].rolling(20).mean() * 1.2)
+    # Dòng tiền & Điểm
+    df['money_in'] = (df['volume'] > df['volume'].rolling(20).mean() * 1.15)
     
-    # Chấm điểm
     score = 0
     last = df.iloc[-1]
-    if last['close'] > last['ma10']: score += 3
-    if last['close'] > last['ma20']: score += 2
+    if last['close'] > last['ma10']: score += 4
+    if last['close'] > last['ma20']: score += 3
     if last['money_in']: score += 3
-    if last['rsi'] > 50: score += 2
-    
     df['total_score'] = score
-    df['is_buy'] = (df['close'] > df['ma20']) & (df['money_in'])
-    
+    df['is_buy'] = (last['close'] > last['ma20']) and last['money_in']
     return df
 
-# --- SIDEBAR ---
+# --- SIDEBAR: CẬP NHẬT CỔ PHIẾU ---
 with st.sidebar:
-    st.header("🏆 TRADING V37.5")
-    ticker_input = st.text_input("🔍 SOI MÃ CHI TIẾT:", "MWG").upper()
+    st.header("⚙️ CONTROL PANEL")
+    ticker_input = st.text_input("🔍 SOI MÃ (HPG, MWG...):", "HPG").upper()
     
-    if st.button("🚀 KÍCH HOẠT HỆ THỐNG (MỚI)", use_container_width=True):
-        with st.spinner("Đang xây dựng lại dữ liệu sạch..."):
-            all_data = []
+    if st.button("🔄 CẬP NHẬT CỔ PHIẾU (Real-time)", use_container_width=True):
+        with st.spinner("Đang kết nối sàn HOSE..."):
+            # 1. Tải VNINDEX
+            vni = yf.download("^VNINDEX", period="1y", interval="1d", progress=False)
+            vni.to_csv("vnindex.csv")
+            
+            # 2. Tải danh mục cổ phiếu
+            all_list = []
             for m in ALL_TICKERS:
                 t = yf.download(f"{m}.VN", period="1y", interval="1d", progress=False)
                 if not t.empty:
-                    # Reset index để đưa Date thành cột
                     t = t.reset_index()
                     t['symbol'] = m
-                    all_data.append(t)
+                    all_list.append(t)
             
-            if all_data:
-                full_df = pd.concat(all_data, ignore_index=True)
-                full_df.to_csv("master_data.csv", index=False)
-                st.success("Hệ thống đã KÍCH HOẠT!")
+            if all_list:
+                pd.concat(all_list, ignore_index=True).to_csv("hose.csv", index=False)
+                st.success("Đã cập nhật dữ liệu Real-time!")
                 st.rerun()
 
-    menu = st.radio("CHỨC NĂNG:", ["📈 ĐỒ THỊ FIREANT", "📊 DÒNG TIỀN NGÀNH", "🎯 LỌC SIÊU ĐIỂM MUA"])
+    menu = st.radio("MENU:", ["📈 ĐỒ THỊ FIREANT", "📊 DÒNG TIỀN NGÀNH", "🎯 SIÊU ĐIỂM MUA"])
 
-# --- HIỂN THỊ CHÍNH ---
-if os.path.exists("master_data.csv"):
-    hose_df = pd.read_csv("master_data.csv")
+# --- HIỂN THỊ ---
+if os.path.exists("hose.csv"):
+    hose_df = pd.read_csv("hose.csv")
     
     if menu == "📈 ĐỒ THỊ FIREANT":
-        st.subheader(f"📊 BIỂU ĐỒ KỸ THUẬT: {ticker_input}")
-        df_ticker = hose_df[hose_df['symbol'] == ticker_input].copy()
-        df_m = calculate_master_signals(df_ticker)
+        st.subheader(f"📊 PHÂN TÍCH CHI TIẾT: {ticker_input}")
+        data_mã = hose_df[hose_df['symbol'] == ticker_input].copy()
+        df_final = calculate_indicators(data_mã)
         
-        if df_m is not None:
+        if df_final is not None:
             fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
             
-            # Tầng 1: Nến & MA
-            fig.add_trace(go.Candlestick(x=df_m['date'], open=df_m['open'], high=df_m['high'], low=df_m['low'], close=df_m['close'], name="Giá"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_m['date'], y=df_m['ma20'], line=dict(color='yellow', width=2), name="MA20"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_m['date'], y=df_m['ma50'], line=dict(color='cyan', width=1), name="MA50"), row=1, col=1)
+            # Nến & MA
+            fig.add_trace(go.Candlestick(x=df_final['date'], open=df_final['open'], high=df_final['high'], low=df_final['low'], close=df_final['close'], name="Giá"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_final['date'], y=df_final['ma20'], line=dict(color='yellow'), name="MA20"), row=1, col=1)
             
-            # Điểm mua
-            buy_pts = df_m[df_m['is_buy']]
-            fig.add_trace(go.Scatter(x=buy_pts['date'], y=buy_pts['low']*0.98, mode='markers', marker=dict(symbol='triangle-up', size=15, color='lime'), name="MUA"), row=1, col=1)
-
-            # Tầng 2: Volume
-            fig.add_trace(go.Bar(x=df_m['date'], y=df_m['volume'], name="Volume", marker_color='dodgerblue'), row=2, col=1)
+            # Volume
+            fig.add_trace(go.Bar(x=df_final['date'], y=df_final['volume'], name="Volume", marker_color='dodgerblue'), row=2, col=1)
             
-            # Tầng 3: RSI
-            fig.add_trace(go.Scatter(x=df_m['date'], y=df_m['rsi'], line=dict(color='orange'), name="RSI"), row=3, col=1)
+            # RSI
+            fig.add_trace(go.Scatter(x=df_final['date'], y=df_final['rsi'], line=dict(color='orange'), name="RSI"), row=3, col=1)
 
-            fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False)
+            fig.update_layout(height=750, template="plotly_dark", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-            st.success(f"🚩 {ticker_input} - Điểm: {df_m['total_score'].iloc[-1]}/10")
+            st.success(f"HPG/Market Score: {df_final['total_score'].iloc[-1]}/10")
         else:
-            st.warning(f"Không có dữ liệu cho mã {ticker_input}. Hãy nhấn nút KÍCH HOẠT ở sidebar.")
+            st.error(f"Lỗi: Mã {ticker_input} không có dữ liệu. Nhấn 'Cập nhật cổ phiếu'.")
 
     elif menu == "📊 DÒNG TIỀN NGÀNH":
-        st.subheader("🌊 SỨC MẠNH DÒNG TIỀN THEO NHÓM NGÀNH")
-        summary = []
+        st.subheader("🌊 SỨC MẠNH DÒNG TIỀN (Scale 10)")
+        res = []
         for n, mãs in NGANH_MASTER.items():
-            pts = []
+            scores = []
             for m in mãs:
-                subset = hose_df[hose_df['symbol'] == m].copy()
-                d = calculate_master_signals(subset)
-                if d is not None: pts.append(d['total_score'].iloc[-1])
-            avg = np.mean(pts) if pts else 0
-            summary.append({"Ngành": n, "Sức Mạnh": round(avg, 1), "Số mã hợp lệ": len(pts)})
-        
-        st.table(pd.DataFrame(summary).sort_values("Sức Mạnh", ascending=False))
+                d = calculate_indicators(hose_df[hose_df['symbol'] == m])
+                if d is not None: scores.append(d['total_score'].iloc[-1])
+            res.append({"Ngành": n, "Điểm": round(np.mean(scores),1) if scores else 0, "Số mã": len(scores)})
+        st.table(pd.DataFrame(res).sort_values("Điểm", ascending=False))
 
-    elif menu == "🎯 LỌC SIÊU ĐIỂM MUA":
-        st.subheader("🚀 SIÊU ĐIỂM MUA: TIỀN VÀO + NỀN GIÁ")
-        results = []
+    elif menu == "🎯 SIÊU ĐIỂM MUA":
+        st.subheader("🚀 QUÉT ĐIỂM MUA ĐỘT BIẾN")
+        buy_list = []
         for s in hose_df['symbol'].unique():
-            d = calculate_master_signals(hose_df[hose_df['symbol'] == s].copy())
-            if d is not None:
-                l = d.iloc[-1]
-                if l['total_score'] >= 6:
-                    results.append({"Mã": s, "Điểm Dòng Tiền": l['total_score'], "RSI": round(l['rsi'],1)})
-        
-        if results:
-            st.dataframe(pd.DataFrame(results).sort_values("Điểm Dòng Tiền", ascending=False), use_container_width=True)
-        else:
-            st.info("Chưa có mã nào đạt tiêu chuẩn mua mạnh.")
+            d = calculate_indicators(hose_df[hose_df['symbol'] == s])
+            if d is not None and d['total_score'].iloc[-1] >= 7:
+                buy_list.append({"Mã": s, "Điểm": d['total_score'].iloc[-1], "RSI": round(d['rsi'].iloc[-1],1)})
+        st.dataframe(pd.DataFrame(buy_list).sort_values("Điểm", ascending=False), use_container_width=True)
 else:
-    st.info("Chào mừng! Hãy nhấn '🚀 KÍCH HOẠT HỆ THỐNG (MỚI)' để bắt đầu phân tích.")
+    st.info("Hệ thống chưa có dữ liệu. Vui lòng nhấn nút '🔄 CẬP NHẬT CỔ PHIẾU' ở bên trái.")
